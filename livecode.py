@@ -1,6 +1,7 @@
 import sublime, sublime_plugin, os, glob, sys
 import ast, time, default_completions
 from smash import Tree
+from threading import Thread
 
 def getmodules():
     modules = []
@@ -206,6 +207,15 @@ class AST(Tree):
     def isClass(self, name):
         pass
 
+class ModuleLookupThread(Thread):
+    """docstring for ModuleLookupThread"""
+    def __init__(self):
+        super(ModuleLookupThread, self).__init__()
+        self.modules = set([])
+
+    def run(self):
+        self.modules = getmodules()
+
 class LiveCode(sublime_plugin.EventListener):
 
     def getsubregion(self, view, prefix, locations, size):
@@ -244,9 +254,10 @@ class LiveCode(sublime_plugin.EventListener):
                         if hasattr(root, "id"):
                             opts.add(root.id)
                     elif "Assign" in root.__class__.__name__:
-                        for target in root.targets:
-                            if hasattr(target, "id"):
-                                opts.add(target.id)
+                        if hasattr(root, "targets"):
+                            for target in root.targets:
+                                if hasattr(target, "id"):
+                                    opts.add(target.id)
         return opts
 
     def arguments(self, lineno):
@@ -279,10 +290,14 @@ class LiveCode(sublime_plugin.EventListener):
 
     def on_query_completions(self, view, prefix, locations):
         # global py_funcs, py_members, subl_methods, subl_methods_all
-        print "on_query_completions"
+        # print "on_query_completions: %s, '%s', %s, '%s'" % (view, prefix, locations, self.getsubregion(view, prefix, locations, 1))
         if not view.match_selector(locations[0], 'source.python'): #  -string -comment -constant
             print "exiting"
             return []
+
+        if not hasattr(self, "thread"):
+            self.thread = ModuleLookupThread()
+            self.thread.start()
 
         completions = []
         compl_full = []
@@ -315,7 +330,11 @@ class LiveCode(sublime_plugin.EventListener):
                         completions.append((module + "\tmodule", module,))
 
                     if not hasattr(self, "peer_modules") or time.time() - self.last_modified > 0.3:
-                        self.peer_modules = getmodules()
+                        self.peer_modules = self.thread.modules
+                        try:
+                            self.thread.start()
+                        except RuntimeError:
+                            pass
 
                     # add modules
                     completions.extend(self.peer_modules)
